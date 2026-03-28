@@ -9,10 +9,12 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { nip19 } from "nostr-tools";
 import { RSVPResponse } from "../stores/events";
 import { useState } from "react";
+import { useIntl } from "react-intl";
 
 interface ParticipantProps {
   pubKey: string;
   rsvpResponse?: RSVPResponse;
+  isAuthor: boolean;
 }
 
 const getRSVPIcon = (response: RSVPResponse, theme: Theme) => {
@@ -49,9 +51,9 @@ const getRSVPIcon = (response: RSVPResponse, theme: Theme) => {
 const truncateText = (text: string, maxLength: number = 20) => {
   if (text.length <= maxLength) return text;
 
-  // For npub, show first 25 and last 4 characters
+  // For npub, show first 8 and last 4 characters
   if (text.startsWith("npub")) {
-    return `${text.slice(0, 25)}...${text.slice(-4)}`;
+    return `${text.slice(0, 8)}...${text.slice(-4)}`;
   }
 
   // For regular names, truncate with ellipsis
@@ -60,12 +62,16 @@ const truncateText = (text: string, maxLength: number = 20) => {
 
 export const Participant = ({
   pubKey,
-  rsvpResponse = RSVPResponse.pending,
+  rsvpResponse,
+  isAuthor,
 }: ParticipantProps) => {
+  const intl = useIntl();
   const theme = useTheme();
   const { participant, loading } = useGetParticipant({ pubKey });
   const npub = nip19.npubEncode(pubKey);
-  const [copyTooltip, setCopyTooltip] = useState("Click to copy");
+  const [copyTooltip, setCopyTooltip] = useState(
+    intl.formatMessage({ id: "participant.clickToCopy" }),
+  );
 
   const displayName = participant?.name || npub;
   const isLongText = displayName.length > 20;
@@ -74,8 +80,12 @@ export const Participant = ({
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(displayName);
-      setCopyTooltip("Copied!");
-      setTimeout(() => setCopyTooltip("Click to copy"), 2000);
+      setCopyTooltip(intl.formatMessage({ id: "participant.copied" }));
+      setTimeout(
+        () =>
+          setCopyTooltip(intl.formatMessage({ id: "participant.clickToCopy" })),
+        2000,
+      );
     } catch (err) {
       console.error("Failed to copy:", err);
     }
@@ -85,8 +95,7 @@ export const Participant = ({
     return (
       <div
         style={{
-          display: "flex",
-          maxWidth: "92%",
+          display: "inline-flex",
           alignItems: "center",
           gap: "12px",
         }}
@@ -112,8 +121,7 @@ export const Participant = ({
   return (
     <div
       style={{
-        display: "flex",
-        maxWidth: "92%",
+        display: "inline-flex",
         alignItems: "center",
         gap: "12px",
       }}
@@ -153,7 +161,14 @@ export const Participant = ({
             gap: "4px",
           }}
         >
-          <span>{truncateText(displayName)}</span>
+          <span style={{ textDecoration: "underline" }}>
+            {truncateText(displayName)}
+          </span>
+          {isAuthor && (
+            <span style={{ color: theme.palette.text.secondary }}>
+              ({intl.formatMessage({ id: "participant.author" })})
+            </span>
+          )}
           {isLongText && (
             <Tooltip title={copyTooltip} arrow>
               <IconButton

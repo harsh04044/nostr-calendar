@@ -10,8 +10,9 @@ import {
 } from "@mui/material";
 import { theme } from "./theme";
 import { useEffect, useState } from "react";
+import dayjs from "dayjs";
 import { useUser } from "./stores/user";
-import { IntlProvider } from "react-intl";
+import { IntlProvider, useIntl } from "react-intl";
 import { flattenMessages } from "./common/utils";
 import dictionary from "./common/dictionary";
 import LoginModal from "./components/LoginModal";
@@ -24,14 +25,23 @@ import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { addNotificationClickListener } from "./utils/notifications";
 import { useTimeBasedEvents } from "./stores/events";
 import { useRelayStore } from "./stores/relays";
+import { isNative } from "./utils/platform";
+import { ICSListener } from "./components/ICSListener";
+import { ICalendarEvent } from "./utils/types";
+import { useCalendarLists } from "./stores/calendarLists";
+import { CalendarManageDialog } from "./components/CalendarManageDialog";
 
-let _locale =
+const browserLocale =
   (navigator.languages && navigator.languages[0]) ||
   navigator.language ||
   "en-US";
-_locale = ~Object.keys(dictionary).indexOf(_locale) ? _locale : "en-US";
+
+const _locale = ~Object.keys(dictionary).indexOf(browserLocale)
+  ? browserLocale
+  : "en-US";
 
 function Application() {
+  const intl = useIntl();
   const {
     user,
     isInitialized,
@@ -41,7 +51,16 @@ function Application() {
   } = useUser();
   const [appMode, setAppMode] = useState<"login" | "guest" | null>(null);
   const [showModeSelection, setShowModeSelection] = useState(false);
+  const [importedEvent, setImportedEvent] = useState<ICalendarEvent | null>(
+    null,
+  );
   const navigate = useNavigate();
+  const {
+    calendars,
+    isLoaded: calendarsLoaded,
+    createCalendar,
+  } = useCalendarLists();
+  const [showOnboardingDialog, setShowOnboardingDialog] = useState(false);
 
   useEffect(() => {
     initializeUser();
@@ -55,11 +74,51 @@ function Application() {
     });
   }, [navigate]);
 
+  // Handle Android back button: navigate back instead of closing the app.
+  // Only exit the app if there's no browser history to go back to.
+  useEffect(() => {
+    if (!isNative) return;
+
+    let cleanup: (() => void) | undefined;
+    import("@capacitor/app").then(({ App: CapApp }) => {
+      const listener = CapApp.addListener("backButton", ({ canGoBack }) => {
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          CapApp.exitApp();
+        }
+      });
+      cleanup = () => {
+        listener.then((l) => l.remove());
+      };
+    });
+
+    return () => {
+      cleanup?.();
+    };
+  }, []);
+
   useEffect(() => {
     if (!user && !appMode && isInitialized) {
       setShowModeSelection(true);
     }
   }, [user, isInitialized, appMode]);
+
+  // Show onboarding dialog when user is logged in but has no calendars
+  useEffect(() => {
+    if (user && calendarsLoaded && calendars.length === 0) {
+      setShowOnboardingDialog(true);
+    }
+  }, [user, calendarsLoaded, calendars.length]);
+
+  const handleOnboardingSave = async (data: {
+    title: string;
+    description: string;
+    color: string;
+  }) => {
+    await createCalendar(data.title, data.description, data.color);
+    setShowOnboardingDialog(false);
+  };
 
   useEffect(() => {
     if (appMode === "login" && isInitialized && !user) {
@@ -82,7 +141,12 @@ function Application() {
 
   return (
     <>
-      <Header />
+      <Header onImportEvent={setImportedEvent} />
+      <ICSListener
+        importedEvent={importedEvent}
+        onClose={() => setImportedEvent(null)}
+        onImportEvent={setImportedEvent}
+      />
       {/* Mode Selection Modal */}
       <ModeSelectionModal
         isOpen={showModeSelection}
@@ -93,7 +157,9 @@ function Application() {
         <Dialog open>
           <DialogContent>
             <Box display="flex" justifyContent="center" alignItems="center">
-              <Typography>Logging in...</Typography>
+              <Typography>
+                {intl.formatMessage({ id: "message.loggingIn" })}
+              </Typography>
             </Box>
           </DialogContent>
         </Dialog>
@@ -102,24 +168,60 @@ function Application() {
         open={showLoginModal}
         onClose={() => updateLoginModal(false)}
       />
+      {showOnboardingDialog && (
+        <CalendarManageDialog
+          open={showOnboardingDialog}
+          onClose={() => setShowOnboardingDialog(false)}
+          onSave={handleOnboardingSave}
+          blocking
+        />
+      )}
       <RelayManager />
       <Toolbar />
-      <Box>
-        <Routing />
-      </Box>
+      <Box>{user && isInitialized && <Routing />}</Box>
     </>
   );
 }
 
+function useDayjsLocale() {
+  const [dayjsLocale, setDayjsLocale] = useState("en");
+
+  useEffect(() => {
+    const tag = browserLocale.toLowerCase();
+    // Try full tag (e.g. "en-gb"), then language only (e.g. "de")
+    const candidates = [tag, tag.split("-")[0]];
+    console.log(browserLocale);
+    (async () => {
+      for (const candidate of candidates) {
+        if (candidate === "en") return; // already the default
+        try {
+          await import(/* @vite-ignore */ `dayjs/locale/${candidate}.js`);
+          dayjs.locale(candidate);
+          setDayjsLocale(candidate);
+          return;
+        } catch {
+          // locale file not available, try next
+        }
+      }
+    })();
+  }, []);
+
+  return dayjsLocale;
+}
+
 export default function App() {
   const i18nLocale = _locale;
+  const dayjsLocale = useDayjsLocale();
   const locale_dictionary = {
     ...flattenMessages(dictionary["en-US"]),
     ...flattenMessages(dictionary[i18nLocale]),
   };
   return (
     <IntlProvider locale={i18nLocale} messages={locale_dictionary}>
-      <LocalizationProvider dateAdapter={AdapterDayjs}>
+      <LocalizationProvider
+        dateAdapter={AdapterDayjs}
+        adapterLocale={dayjsLocale}
+      >
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <BrowserRouter>

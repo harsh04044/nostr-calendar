@@ -1,6 +1,6 @@
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { isNative } from "./platform";
-import type { ICalendarEvent } from "./types";
+import type { ICalendarEvent, IScheduledNotification } from "./types";
 import { getNextOccurrenceInRange } from "./repeatingEventsHelper";
 
 const scheduledNotificationKeys = new Set<string>();
@@ -46,18 +46,18 @@ function hashToNumber(str: string): number {
  * For repeating events, it includes the occurrence start time.
  */
 function buildNotificationKey(
-  eventId: string,
+  id: string,
   occurrenceStart: number,
   isRepeating: boolean,
 ): string {
-  if (!isRepeating) return eventId;
-  return `${eventId}:${occurrenceStart}`;
+  if (!isRepeating) return id;
+  return `${id}:${occurrenceStart}`;
 }
 
 export async function scheduleEventNotifications(
   event: ICalendarEvent,
-): Promise<void> {
-  if (!isNative) return;
+): Promise<IScheduledNotification[]> {
+  if (!isNative) return [];
 
   await initScheduledIds();
 
@@ -71,24 +71,26 @@ export async function scheduleEventNotifications(
 
   if (isRepeating) {
     const nextOccurrence = getNextOccurrenceInRange(event, now, twoDaysFromNow);
-    if (nextOccurrence === null) return;
+    if (nextOccurrence === null) return [];
     occurrenceStart = nextOccurrence;
   } else {
     // Non-repeating: skip if already started
-    if (event.begin <= now) return;
+    if (event.begin <= now) return [];
     // Skip if more than 2 days away
-    if (event.begin > twoDaysFromNow) return;
+    if (event.begin > twoDaysFromNow) return [];
     occurrenceStart = event.begin;
   }
 
   const notificationKey = buildNotificationKey(
-    event.eventId,
+    event.id,
     occurrenceStart,
     isRepeating,
   );
 
-  // Already scheduled for this specific occurrence
-  if (scheduledNotificationKeys.has(notificationKey)) return;
+  // Already scheduled for this specific occurrence — return existing info
+  if (scheduledNotificationKeys.has(notificationKey)) {
+    return buildNotificationInfo(occurrenceStart, now);
+  }
 
   const baseId = hashToNumber(notificationKey);
   const tenMinBefore = occurrenceStart - 10 * 60 * 1000;
@@ -114,7 +116,7 @@ export async function scheduleEventNotifications(
       title: `Upcoming: ${event.title}`,
       body: `Starts in 10 minutes${locationSuffix}`,
       schedule: { at: new Date(tenMinBefore), allowWhileIdle: true },
-      extra: { eventId: event.eventId, notificationKey },
+      extra: { eventId: event.id, notificationKey },
     });
   }
 
@@ -124,24 +126,46 @@ export async function scheduleEventNotifications(
       title: event.title,
       body: `Starting now${locationSuffix}`,
       schedule: { at: new Date(occurrenceStart), allowWhileIdle: true },
-      extra: { eventId: event.eventId, notificationKey },
+      extra: { eventId: event.id, notificationKey },
     });
   }
 
-  if (notifications.length === 0) return;
+  if (notifications.length === 0) return [];
 
   try {
     const permResult = await LocalNotifications.requestPermissions();
-    if (permResult.display !== "granted") return;
+    if (permResult.display !== "granted") return [];
 
     await LocalNotifications.schedule({ notifications });
     scheduledNotificationKeys.add(notificationKey);
     console.log(
-      `Scheduled notifications for ${event.eventId} (occurrence: ${new Date(occurrenceStart).toISOString()})`,
+      `Scheduled notifications for ${event.id} (occurrence: ${new Date(occurrenceStart).toISOString()})`,
     );
+    return buildNotificationInfo(occurrenceStart, now);
   } catch (err) {
     console.warn("Failed to schedule notification", err);
+    return [];
   }
+}
+
+/**
+ * Build notification info entries for the two scheduled notifications
+ * (10 min before and at event time).
+ */
+function buildNotificationInfo(
+  occurrenceStart: number,
+  now: number,
+): IScheduledNotification[] {
+  const result: IScheduledNotification[] = [];
+  const tenMinBefore = occurrenceStart - 10 * 60 * 1000;
+
+  if (tenMinBefore > now) {
+    result.push({ label: "10 minutes before", scheduledAt: tenMinBefore });
+  }
+  if (occurrenceStart > now) {
+    result.push({ label: "At event start", scheduledAt: occurrenceStart });
+  }
+  return result;
 }
 
 export function addNotificationClickListener(

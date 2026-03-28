@@ -28,6 +28,11 @@ export interface IRSVPResponse {
   timestamp: number;
 }
 
+export interface IScheduledNotification {
+  label: string;
+  scheduledAt: number;
+}
+
 export interface ICalendarEvent {
   begin: number;
   description: string;
@@ -51,4 +56,6 @@ export interface ICalendarEvent {
   repeat: {
     rrule: string | null;
   };
+  calendarId?: string;
+  isInvitation?: boolean;
 }
